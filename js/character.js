@@ -14,7 +14,7 @@ export function createCharacter() {
     version: SCHEMA_VERSION,
     name: "",
     abilities: Object.fromEntries(ABILITIES.map((a) => [a.id, 10])),
-    combat: { ac: 10, speed: 30, initiativeMisc: 0 },
+    combat: { ac: 10, speed: 30 },
     hp: { current: 10, max: 10 },
     resources: [],
     attacks: [],
@@ -51,7 +51,7 @@ function pool(raw, fallbackMax) {
 /**
  * Приводит произвольные данные (из хранилища, файла импорта) к корректному персонажу.
  * Неизвестные поля отбрасываются, числа ограничиваются допустимыми диапазонами.
- * Поля прошлых версий (уровень, класс, владения, временные хиты) просто игнорируются.
+ * Поля прошлых версий (уровень, класс, владения, временные хиты, бонус инициативы) просто игнорируются.
  */
 export function normalizeCharacter(raw) {
   const base = createCharacter();
@@ -64,7 +64,6 @@ export function normalizeCharacter(raw) {
   }
   base.combat.ac = clamp(toInt(src.combat?.ac, 10), 0, 99);
   base.combat.speed = clamp(toInt(src.combat?.speed, 30), 0, 999);
-  base.combat.initiativeMisc = clamp(toInt(src.combat?.initiativeMisc, 0), -20, 20);
   base.hp = pool(src.hp, 10);
   base.resources = (Array.isArray(src.resources) ? src.resources : [])
     .slice(0, MAX_RESOURCES)

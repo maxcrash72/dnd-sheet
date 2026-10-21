@@ -64,8 +64,9 @@ export function skillBonus(character, skill) {
   return abilityModifier(character.abilities[skill.ability]);
 }
 
+/** Инициатива — модификатор ловкости, без дополнительных бонусов. */
 export function initiativeBonus(character) {
-  return abilityModifier(character.abilities.dex) + toInt(character.combat.initiativeMisc, 0);
+  return abilityModifier(character.abilities.dex);
 }
 
 /** Подпись режима броска: 0 — обычный, +N — преимущество (N доп. кубов), −N — помеха. */

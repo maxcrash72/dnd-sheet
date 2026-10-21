@@ -137,13 +137,3 @@ export function formulaRequest(terms) {
     bonus,
   };
 }
-
-/** Удваивает количество кубиков в формуле (критическое попадание). */
-export function critFormula(formula) {
-  return parseFormula(formula)
-    .map((t, i) => {
-      const sign = t.sign < 0 ? "-" : i === 0 ? "" : "+";
-      return t.kind === "dice" ? `${sign}${t.count * 2}d${t.sides}` : `${sign}${t.value}`;
-    })
-    .join("");
-}

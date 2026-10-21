@@ -6,7 +6,7 @@ import {
   initiativeBonus, advantageLabel, spendPool, restorePool, clamp, toInt,
 } from "./rules.js";
 import {
-  rollD20, d20FromRolls, d20Request, parseFormula, rollFormula, formulaFromValues, formulaRequest, critFormula,
+  rollD20, d20FromRolls, d20Request, parseFormula, rollFormula, formulaFromValues, formulaRequest,
 } from "./dice.js";
 import { detectDice3d, roll3d, DICE_STYLES } from "./dice3d.js";
 import {
@@ -17,7 +17,6 @@ import { sendRoll, describeDetail } from "./rolls.js";
 import { initTheme } from "./theme.js";
 
 const QUICK_DICE = [4, 6, 8, 10, 12, 20, 100];
-const CRIT_DAMAGE_WINDOW_MS = 60_000;
 const DICE_3D_RETRY_MS = 30_000;
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -31,7 +30,6 @@ const settings = loadSettings({
   advantage: 0, hidden: false, showOnMap: true, use3d: true, diceStyle: DICE_STYLES[0].id, tab: "sheet",
 });
 settings.advantage = clamp(toInt(settings.advantage, 0), -MAX_ADVANTAGE, MAX_ADVANTAGE);
-const lastCritAt = new Map(); // id атаки → время последнего крита на попадание
 const seenLogIds = new Set();
 let unreadLog = 0;
 
@@ -125,7 +123,7 @@ function renderAttacks() {
           h("input", { type: "number", min: -20, max: 30, inputmode: "numeric", "aria-label": "Бонус атаки", dataset: { attackField: "bonus" } }),
           h("input", { type: "text", maxlength: 40, placeholder: "1d8+3", "aria-label": "Формула урона", dataset: { attackField: "damage" } }),
           h("button", { type: "button", class: "roll-btn", title: "Бросок атаки", onclick: () => rollAttack(atk.id) }, "Атака"),
-          h("button", { type: "button", class: "roll-btn", title: "Бросок урона (после крита — удвоенные кубики)", onclick: () => rollAttackDamage(atk.id) }, "Урон"),
+          h("button", { type: "button", class: "roll-btn", title: "Бросок урона", onclick: () => rollAttackDamage(atk.id) }, "Урон"),
           h("button", { type: "button", class: "remove", title: "Удалить", "aria-label": "Удалить атаку", onclick: () => removeAttack(atk.id) }, "×"),
         ),
       ),
@@ -335,25 +333,14 @@ function attackName(atk) {
   return atk.name.trim() || "Атака";
 }
 
-async function rollAttack(id) {
+function rollAttack(id) {
   const atk = character.attacks.find((a) => a.id === id);
-  if (!atk) return;
-  const r = await rollCheck(attackName(atk), atk.bonus);
-  if (r.crit) lastCritAt.set(id, Date.now());
-  else lastCritAt.delete(id);
+  if (atk) rollCheck(attackName(atk), atk.bonus);
 }
 
 function rollAttackDamage(id) {
   const atk = character.attacks.find((a) => a.id === id);
-  if (!atk) return;
-  const crit = Date.now() - (lastCritAt.get(id) ?? 0) < CRIT_DAMAGE_WINDOW_MS;
-  lastCritAt.delete(id);
-  try {
-    const formula = crit ? critFormula(atk.damage) : atk.damage;
-    rollDamage(`${attackName(atk)} — урон${crit ? " (крит ×2)" : ""}`, formula);
-  } catch (e) {
-    setStatus(e.message, true);
-  }
+  if (atk) rollDamage(`${attackName(atk)} — урон`, atk.damage);
 }
 
 function removeAttack(id) {
@@ -444,7 +431,6 @@ function resetConfirm(state) {
 
 function replaceCharacter(next) {
   character = next;
-  lastCritAt.clear();
   renderAttacks();
   renderResources();
   syncInputs();

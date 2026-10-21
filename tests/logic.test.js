@@ -6,7 +6,7 @@ import {
   advantageLabel, spendPool, restorePool, SKILLS,
 } from "../js/rules.js";
 import {
-  parseFormula, rollFormula, rollD20, d20FromRolls, d20Request, formulaRequest, formulaFromValues, critFormula,
+  parseFormula, rollFormula, rollD20, d20FromRolls, d20Request, formulaRequest, formulaFromValues,
 } from "../js/dice.js";
 import { createCharacter, normalizeCharacter } from "../js/character.js";
 
@@ -46,11 +46,11 @@ test("спасброски и навыки равны модификатору �
   }
 });
 
-test("инициатива — ловкость плюс прочий бонус", () => {
+test("инициатива — модификатор ловкости без бонусов", () => {
   const c = createCharacter();
   c.abilities.dex = 14;
-  c.combat.initiativeMisc = 1;
-  assert.equal(initiativeBonus(c), 3);
+  c.combat.initiativeMisc = 1; // поле прошлой версии игнорируется
+  assert.equal(initiativeBonus(c), 2);
 });
 
 test("18 навыков, у всех уникальные id", () => {
@@ -130,11 +130,6 @@ test("результат формулы по значениям 3D-кубико�
   assert.equal(r.text, "[3, 5] + [2] + 2");
 });
 
-test("критический урон удваивает кубики, но не модификатор", () => {
-  assert.equal(critFormula("1d8+3"), "2d8+3");
-  assert.equal(critFormula("2d6+1d4-1"), "4d6+2d4-1");
-});
-
 test("нормализация отбрасывает мусор и ограничивает значения", () => {
   const c = normalizeCharacter({
     name: 42, abilities: { str: 50, dex: "abc" }, hp: { current: 500, max: 20 },
@@ -156,7 +151,7 @@ test("нормализация отбрасывает мусор и ограни
 test("миграция: лишние поля прошлых версий отбрасываются", () => {
   const v3 = normalizeCharacter({
     version: 3, name: "Гимли", className: "Воин", level: 7, abilities: { str: 18 },
-    saves: { str: true }, skills: { athletics: 2 }, combat: { ac: 16, inspiration: true },
+    saves: { str: true }, skills: { athletics: 2 }, combat: { ac: 16, inspiration: true, initiativeMisc: 2 },
     hp: { current: 30, max: 40, temp: 5 },
   });
   assert.equal(v3.name, "Гимли");
@@ -165,6 +160,7 @@ test("миграция: лишние поля прошлых версий отб
   assert.deepEqual(v3.hp, { max: 40, current: 30 });
   for (const field of ["className", "level", "saves", "skills"]) assert.equal(field in v3, false, field);
   assert.equal("inspiration" in v3.combat, false);
+  assert.equal("initiativeMisc" in v3.combat, false);
 
   const v1 = normalizeCharacter({ name: "Арагорн", str: "16", dex: "14", con: "12", int: "10", wis: "13", cha: "8" });
   assert.equal(v1.name, "Арагорн");
