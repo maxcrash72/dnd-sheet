@@ -12,7 +12,10 @@ import { detectDice3d, roll3d, DICE_STYLES } from "./dice3d.js";
 import {
   createCharacter, createAttack, createResource, normalizeCharacter, MAX_ATTACKS, MAX_RESOURCES,
 } from "./character.js";
-import { loadCharacter, scheduleSave, loadSettings, saveSettings, loadLog, saveLog } from "./storage.js";
+import {
+  loadSheet, scheduleSave, flushSave, uploadSheet, watchSheet, deleteSheet, listSheets, roomUsage, formatKb, ROOM_LIMIT,
+  loadSettings, saveSettings, loadLog, saveLog,
+} from "./storage.js";
 import { sendRoll, describeDetail } from "./rolls.js";
 import { initTheme } from "./theme.js";
 
@@ -24,6 +27,11 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 let character = createCharacter();
 let loaded = false;
+/** Кто открыл лист: id игрока постоянный между сессиями. Вне Owlbear — «local». */
+const me = { id: "local", name: "", role: "PLAYER" };
+/** Чей лист сейчас открыт: свой или (для мастера) лист другого игрока. */
+let viewingId = "local";
+let stopWatching = () => {};
 let version = "";
 let dice3dAvailable = false;
 const settings = loadSettings({
@@ -186,6 +194,7 @@ function setOut(name, text) {
 }
 
 function fillBar(el, pool, colored) {
+  if (!el) return;
   const fill = Math.min(100, (pool.current / pool.max) * 100);
   el.style.width = `${fill}%`;
   if (colored) el.style.background = fill > 50 ? "var(--success)" : fill > 25 ? "var(--gold)" : "var(--danger)";
@@ -230,7 +239,10 @@ function changed() {
   refresh();
   if (!loaded) return;
   setStatus("Сохранение…");
-  scheduleSave(character, (ok) => setStatus(ok ? "Сохранено" : "Не удалось сохранить", !ok));
+  scheduleSave(viewingId, character, {
+    playerName: viewingId === me.id ? me.name : undefined,
+    onResult: (r) => setStatus(r.error ?? (r.local ? "Сохранено в браузере" : "Сохранено в комнате"), !r.ok),
+  });
 }
 
 let errorShownUntil = 0;
@@ -429,12 +441,87 @@ function resetConfirm(state) {
   $("#reset-sheet").textContent = state ? "Точно очистить?" : "Очистить лист";
 }
 
-function replaceCharacter(next) {
+/** Показывает другой лист (или новую версию текущего) без сохранения. */
+function showCharacter(next) {
   character = next;
   renderAttacks();
   renderResources();
   syncInputs();
+  refresh();
+}
+
+function replaceCharacter(next) {
+  showCharacter(next);
   changed();
+}
+
+// ---------- Листы игроков (для мастера) ----------
+
+function isViewingOther() {
+  return viewingId !== me.id;
+}
+
+/** Открывает лист игрока: загружает его и следит за изменениями, которые вносит владелец. */
+async function openSheet(playerId) {
+  await flushSave(viewingId);
+  stopWatching();
+  viewingId = playerId;
+  const { character: loadedCharacter } = await loadSheet(playerId);
+  showCharacter(loadedCharacter);
+  stopWatching = watchSheet(playerId, (updated) => {
+    showCharacter(updated);
+    setStatus(isViewingOther() ? "Игрок обновил лист" : "Мастер обновил ваш лист");
+  });
+  renderSheetPicker();
+}
+
+let sheetsInRoom = [];
+
+/** Список листов комнаты в шапке — виден только мастеру. */
+function renderSheetPicker(metadata) {
+  if (metadata) sheetsInRoom = listSheets(metadata).filter((s) => s.playerId !== me.id);
+  const bar = $("#gm-bar");
+  bar.hidden = me.role !== "GM";
+  if (bar.hidden) return;
+  const picker = $("#sheet-picker");
+  const others = [...sheetsInRoom].sort((a, b) => a.playerName.localeCompare(b.playerName, "ru"));
+  if (isViewingOther() && !others.some((s) => s.playerId === viewingId)) {
+    others.push({ playerId: viewingId, playerName: "лист удалён", characterName: character.name });
+  }
+  picker.replaceChildren(
+    h("option", { value: me.id }, "Мой лист"),
+    ...others.map((s) =>
+      h("option", { value: s.playerId }, `${s.characterName || "Без имени"} — ${s.playerName || "игрок"}`),
+    ),
+  );
+  picker.value = viewingId;
+  $("#delete-sheet").hidden = !isViewingOther();
+  if (metadata) {
+    const used = roomUsage(metadata);
+    const usage = $("#room-usage");
+    usage.textContent = `Место в комнате: ${formatKb(used)} из ${formatKb(ROOM_LIMIT)}`;
+    usage.classList.toggle("error", used > ROOM_LIMIT * 0.85);
+  }
+}
+
+let confirmDelete = false;
+async function handleDeleteSheet() {
+  const button = $("#delete-sheet");
+  if (!confirmDelete) {
+    confirmDelete = true;
+    button.textContent = "Точно удалить?";
+    setTimeout(() => {
+      confirmDelete = false;
+      button.textContent = "Удалить лист";
+    }, 4000);
+    return;
+  }
+  confirmDelete = false;
+  button.textContent = "Удалить лист";
+  const playerId = viewingId;
+  await openSheet(me.id);
+  await deleteSheet(playerId);
+  setStatus("Лист удалён из комнаты");
 }
 
 // ---------- События ----------
@@ -539,6 +626,8 @@ function bindEvents() {
   });
 
   $("#open-backup").addEventListener("click", openBackup);
+  $("#sheet-picker").addEventListener("change", (e) => openSheet(e.target.value));
+  $("#delete-sheet").addEventListener("click", handleDeleteSheet);
   $("#import-backup").addEventListener("click", importBackup);
   $("#download-backup").addEventListener("click", downloadBackup);
   $("#reset-sheet").addEventListener("click", () => {
@@ -574,14 +663,28 @@ async function start() {
     await new Promise((resolve) => OBR.onReady(resolve));
     await initTheme();
     OBR.action.setBadgeText(undefined).catch(() => {});
+    me.id = OBR.player.id;
+    [me.name, me.role] = await Promise.all([OBR.player.getName(), OBR.player.getRole()]);
+    OBR.player.onChange((player) => {
+      me.name = player.name;
+      if (player.role !== me.role) {
+        me.role = player.role;
+        if (me.role !== "GM" && isViewingOther()) openSheet(me.id);
+        renderSheetPicker();
+      }
+    });
+    OBR.room.onMetadataChange(renderSheetPicker);
+    renderSheetPicker(await OBR.room.getMetadata());
   }
 
-  character = await loadCharacter();
+  viewingId = me.id;
+  const { character: myCharacter, inRoom } = await loadSheet(me.id);
+  await openSheet(me.id);
   loaded = true;
-  renderAttacks();
-  renderResources();
-  syncInputs();
-  refresh();
+  // Лист из прошлой версии (браузер или метаданные игрока) переносим в комнату
+  if (OBR.isAvailable && !inRoom && JSON.stringify(myCharacter) !== JSON.stringify(createCharacter())) {
+    uploadSheet(me.id, myCharacter, me.name).then((r) => r.ok || setStatus(r.error, true));
+  }
   loadLog().forEach((r) => seenLogIds.add(r.id));
   renderLog();
   watchDice3d();
@@ -591,7 +694,7 @@ async function start() {
   } catch {
     version = "";
   }
-  setStatus(OBR.isAvailable ? "Готово" : "Режим без Owlbear: броски видны только вам");
+  setStatus(OBR.isAvailable ? "Лист хранится в комнате" : "Режим без Owlbear: лист и броски только в этом браузере");
 }
 
 start().catch((e) => {

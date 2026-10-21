@@ -180,3 +180,25 @@ test("manifest.json проходит ограничения Owlbear", async () =
     assert.match(url, /^https:\/\/maxcrash72\.github\.io\/dnd-sheet\//);
   }
 });
+
+test("упаковка листа для комнаты: туда и обратно, и заметно меньше исходного", async () => {
+  const { encodeSheet, decodeSheet, metadataSize } = await import("../js/codec.js");
+  const { createResource, createAttack } = await import("../js/character.js");
+  const c = createCharacter();
+  c.name = "Арагорн";
+  c.notes = "Кольчуга, верёвка, факелы. ".repeat(30).slice(0, 1000);
+  c.resources.push(createResource());
+  c.attacks.push(createAttack());
+  const packed = await encodeSheet(c);
+  assert.ok(packed.startsWith("z1:"));
+  assert.deepEqual(await decodeSheet(packed), c);
+  assert.ok(packed.length < metadataSize(c) / 2, `${packed.length} vs ${metadataSize(c)}`);
+  await assert.rejects(decodeSheet("{}"), /формат/);
+});
+
+test("заметки ограничены 1000 символами, id строк короткие", async () => {
+  const { MAX_NOTES } = await import("../js/character.js");
+  const c = normalizeCharacter({ notes: "я".repeat(5000), attacks: [{ id: "123e4567-e89b-12d3-a456-426614174000" }] });
+  assert.equal(c.notes.length, MAX_NOTES);
+  assert.ok(c.attacks[0].id.length <= 12);
+});

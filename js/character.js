@@ -6,7 +6,8 @@ export const SCHEMA_VERSION = 4;
 export const MAX_ATTACKS = 20;
 export const MAX_RESOURCES = 6;
 const MAX_TEXT = 80;
-const MAX_NOTES = 4000;
+// Лист хранится в метаданных комнаты (16 КБ на всю комнату), поэтому заметки ограничены.
+export const MAX_NOTES = 1000;
 const MAX_POOL = 9999;
 
 export function createCharacter() {
@@ -31,8 +32,9 @@ export function createResource() {
   return { id: randomId(), name: "", current: 5, max: 5 };
 }
 
+/** Короткий id строки (атака, ресурс): UUID почти не сжимается и занимал бы лишнее место в комнате. */
 function randomId() {
-  return globalThis.crypto?.randomUUID?.() ?? `a${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  return Math.floor(Math.random() * 36 ** 6).toString(36).padStart(6, "0");
 }
 
 function text(value, max = MAX_TEXT) {
@@ -40,7 +42,7 @@ function text(value, max = MAX_TEXT) {
 }
 
 function id(value) {
-  return typeof value === "string" && value ? value.slice(0, 64) : randomId();
+  return typeof value === "string" && value && value.length <= 12 ? value : randomId();
 }
 
 function pool(raw, fallbackMax) {

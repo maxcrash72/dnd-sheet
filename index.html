@@ -9,6 +9,14 @@
 </head>
 <body>
   <header class="hero">
+    <div id="gm-bar" class="gm-bar" hidden>
+      <div class="gm-row">
+        <span class="gm-label">Лист</span>
+        <select id="sheet-picker" aria-label="Чей лист открыть"></select>
+        <button type="button" class="btn danger small" id="delete-sheet" title="Удалить лист этого игрока из комнаты" hidden>Удалить лист</button>
+      </div>
+      <div id="room-usage" class="muted small-text"></div>
+    </div>
     <input id="name" class="hero-name" data-path="name" type="text" maxlength="80" placeholder="Имя персонажа" autocomplete="off" aria-label="Имя персонажа">
   </header>
 
@@ -86,7 +94,7 @@
       </label>
 
       <h2 class="section-title">Заметки</h2>
-      <textarea data-path="notes" maxlength="4000" rows="5" placeholder="Снаряжение, особенности, всё что угодно…"></textarea>
+      <textarea data-path="notes" maxlength="1000" rows="5" placeholder="Снаряжение, особенности, всё что угодно…"></textarea>
     </section>
 
     <section class="panel" data-panel="log" role="tabpanel" hidden>

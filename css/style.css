@@ -348,3 +348,25 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Панель мастера: выбор листа игрока */
+.gm-bar {
+  margin: -4px -4px 10px;
+  padding: 8px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.gm-row { display: flex; align-items: center; gap: 6px; }
+.gm-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.gm-row select {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: var(--text);
+}
+.btn.small { padding: 3px 8px; font-size: 12px; }
+.small-text { font-size: 11px; margin-top: 4px; }

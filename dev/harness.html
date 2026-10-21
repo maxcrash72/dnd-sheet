@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Лист — стенд без Owlbear</title>
+  <!--
+    Открывает index.html с подменённым SDK (dev/obr-mock.js).
+    Пример: dev/harness.html?player=p1&name=Иван  и  dev/harness.html?player=gm&name=Мастер&role=GM
+    Сброс общей «комнаты»: localStorage.removeItem("obr-mock:room-metadata").
+  -->
+</head>
+<body>
+<script>
+  (async () => {
+    const html = await (await fetch("../index.html", { cache: "no-cache" })).text();
+    const importMap = JSON.stringify({
+      imports: { "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm": new URL("obr-mock.js", location.href).href },
+    });
+    const head = `<head><base href="../"><script type="importmap">${importMap}<\/script>`;
+    document.open();
+    document.write(html.replace("<head>", head));
+    document.close();
+  })();
+</script>
+</body>
+</html>
