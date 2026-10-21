@@ -1,7 +1,7 @@
 // Рассылка бросков и их показ. Отправляет окно листа, показывает фоновая страница каждого игрока.
 
 import OBR, { buildLabel, PLUGIN_ID } from "./obr.js";
-import { formatModifier } from "./rules.js";
+import { formatModifier, advantageLabel } from "./rules.js";
 import { loadLog, saveLog } from "./storage.js";
 
 export const ROLL_CHANNEL = `${PLUGIN_ID}/roll`;
@@ -20,10 +20,10 @@ export function describeRoll(roll) {
   return `${who} · ${roll.label}: ${roll.total}${flag}`;
 }
 
-/** Подробности: выпавшие кубики и модификатор, например «[12, 7] +5 (преим.)». */
+/** Подробности: выпавшие кубики и модификатор, например «[12, 7] +5 (преимущество)». */
 export function describeDetail(roll) {
   if (roll.kind === "formula") return roll.detail;
-  const mode = roll.mode === "advantage" ? " (преим.)" : roll.mode === "disadvantage" ? " (помеха)" : "";
+  const mode = roll.advantage ? ` (${advantageLabel(roll.advantage).toLowerCase()})` : "";
   const mod = roll.modifier ? ` ${formatModifier(roll.modifier)}` : "";
   return `[${roll.rolls.join(", ")}]${mod}${mode}`;
 }

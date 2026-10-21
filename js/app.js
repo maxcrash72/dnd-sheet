@@ -2,17 +2,23 @@
 
 import OBR from "./obr.js";
 import {
-  ABILITIES, SKILLS, abilityModifier, proficiencyBonus, formatModifier, savingThrowBonus, skillBonus,
-  initiativeBonus, passivePerception, applyDamage, applyHealing, toInt,
+  ABILITIES, SKILLS, MAX_ADVANTAGE, abilityModifier, formatModifier, savingThrowBonus, skillBonus,
+  initiativeBonus, advantageLabel, spendPool, restorePool, clamp, toInt,
 } from "./rules.js";
-import { rollD20, rollFormula, critFormula } from "./dice.js";
-import { createCharacter, createAttack, normalizeCharacter, MAX_ATTACKS } from "./character.js";
+import {
+  rollD20, d20FromRolls, d20Request, parseFormula, rollFormula, formulaFromValues, formulaRequest, critFormula,
+} from "./dice.js";
+import { detectDice3d, roll3d, DICE_STYLES } from "./dice3d.js";
+import {
+  createCharacter, createAttack, createResource, normalizeCharacter, MAX_ATTACKS, MAX_RESOURCES,
+} from "./character.js";
 import { loadCharacter, scheduleSave, loadSettings, saveSettings, loadLog, saveLog } from "./storage.js";
 import { sendRoll, describeDetail } from "./rolls.js";
 import { initTheme } from "./theme.js";
 
 const QUICK_DICE = [4, 6, 8, 10, 12, 20, 100];
 const CRIT_DAMAGE_WINDOW_MS = 60_000;
+const DICE_3D_RETRY_MS = 30_000;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -20,7 +26,11 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 let character = createCharacter();
 let loaded = false;
 let version = "";
-const settings = loadSettings({ mode: "normal", hidden: false, showOnMap: true, tab: "sheet" });
+let dice3dAvailable = false;
+const settings = loadSettings({
+  advantage: 0, hidden: false, showOnMap: true, use3d: true, diceStyle: DICE_STYLES[0].id, tab: "sheet",
+});
+settings.advantage = clamp(toInt(settings.advantage, 0), -MAX_ADVANTAGE, MAX_ADVANTAGE);
 const lastCritAt = new Map(); // id атаки → время последнего крита на попадание
 const seenLogIds = new Set();
 let unreadLog = 0;
@@ -67,11 +77,7 @@ function buildAbilities() {
           }),
         ),
         h("div", { class: "ability-save" },
-          h("button", {
-            type: "button", class: "prof", title: "Владение спасброском", "aria-label": `Владение спасброском: ${a.name}`,
-            dataset: { saveProf: a.id },
-          }),
-          "Спас",
+          "Спасбросок",
           h("button", {
             type: "button", class: "roll-btn", title: `Спасбросок: ${a.name}`, dataset: { out: `save-${a.id}` },
             onclick: () => rollCheck(`Спасбросок ${a.name}`, savingThrowBonus(character, a.id)),
@@ -87,10 +93,6 @@ function buildSkills() {
   $("#skills").replaceChildren(
     ...SKILLS.map((s) =>
       h("div", { class: "skill" },
-        h("button", {
-          type: "button", class: "prof", "aria-label": `Владение навыком: ${s.name}`,
-          dataset: { skillProf: s.id },
-        }),
         h("span", { class: "skill-name", title: s.name }, s.name, " ", h("span", { class: "skill-ability" }, shortName[s.ability])),
         h("button", {
           type: "button", class: "roll-btn", title: `Проверка: ${s.name}`, dataset: { out: `skill-${s.id}` },
@@ -107,6 +109,7 @@ function buildQuickDice() {
       h("button", { type: "button", class: "roll-btn", onclick: () => rollDamage(`d${sides}`, `1d${sides}`) }, `d${sides}`),
     ),
   );
+  $("#dice-style").replaceChildren(...DICE_STYLES.map((s) => h("option", { value: s.id }, s.name)));
 }
 
 function renderAttacks() {
@@ -132,6 +135,30 @@ function renderAttacks() {
   syncInputs();
 }
 
+function renderResources() {
+  $("#resources").replaceChildren(
+    ...character.resources.map((res) =>
+      h("div", { class: "pool resource", dataset: { resourceId: res.id } },
+        h("div", { class: "resource-head" },
+          h("input", { type: "text", maxlength: 40, placeholder: "Мана", "aria-label": "Название ресурса", dataset: { resourceField: "name" } }),
+          h("button", { type: "button", class: "remove", title: "Удалить", "aria-label": "Удалить ресурс", onclick: () => removeResource(res.id) }, "×"),
+        ),
+        h("div", { class: "bar" }, h("div", { class: "bar-fill", dataset: { resourceFill: res.id } })),
+        h("div", { class: "resource-row" },
+          h("input", { type: "number", min: 0, inputmode: "numeric", "aria-label": "Текущее значение", dataset: { resourceField: "current" } }),
+          h("span", { class: "of" }, "из"),
+          h("input", { type: "number", min: 1, inputmode: "numeric", "aria-label": "Максимум", dataset: { resourceField: "max" } }),
+          h("span", { class: "spacer" }),
+          h("button", { type: "button", class: "btn", title: "Потратить 1", onclick: () => changeResource(res.id, spendPool) }, "−1"),
+          h("button", { type: "button", class: "btn", title: "Восстановить 1", onclick: () => changeResource(res.id, restorePool) }, "+1"),
+        ),
+      ),
+    ),
+  );
+  $("#add-resource").disabled = character.resources.length >= MAX_RESOURCES;
+  syncInputs();
+}
+
 // ---------- Синхронизация состояния и DOM ----------
 
 /** Переносит значения из состояния в поля ввода (кроме поля, которое сейчас редактируют). */
@@ -140,11 +167,17 @@ function syncInputs() {
     if (el === document.activeElement) continue;
     el.value = getPath(character, el.dataset.path) ?? "";
   }
-  for (const row of $$("[data-attack-id]")) {
-    const atk = character.attacks.find((a) => a.id === row.dataset.attackId);
-    if (!atk) continue;
-    for (const el of $$("[data-attack-field]", row)) {
-      if (el !== document.activeElement) el.value = atk[el.dataset.attackField];
+  syncRows("attackId", "attackField", character.attacks);
+  syncRows("resourceId", "resourceField", character.resources);
+}
+
+function syncRows(idKey, fieldKey, items) {
+  const fieldAttr = fieldKey.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  for (const row of $$(`[data-${idKey.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}]`)) {
+    const item = items.find((i) => i.id === row.dataset[idKey]);
+    if (!item) continue;
+    for (const el of $$(`[data-${fieldAttr}]`, row)) {
+      if (el !== document.activeElement) el.value = item[el.dataset[fieldKey]];
     }
   }
 }
@@ -154,38 +187,43 @@ function setOut(name, text) {
   if (el) el.textContent = text;
 }
 
-/** Пересчитывает все производные значения: модификаторы, бонусы, полоску хитов, переключатели. */
+function fillBar(el, pool, colored) {
+  const fill = Math.min(100, (pool.current / pool.max) * 100);
+  el.style.width = `${fill}%`;
+  if (colored) el.style.background = fill > 50 ? "var(--success)" : fill > 25 ? "var(--gold)" : "var(--danger)";
+}
+
+/** Пересчитывает все производные значения: модификаторы, полоски, переключатели. */
 function refresh() {
-  setOut("pb", formatModifier(proficiencyBonus(character.level)));
   for (const a of ABILITIES) {
     setOut(`mod-${a.id}`, formatModifier(abilityModifier(character.abilities[a.id])));
     setOut(`save-${a.id}`, formatModifier(savingThrowBonus(character, a.id)));
-    const prof = $(`[data-save-prof="${a.id}"]`);
-    prof.dataset.level = character.saves[a.id] ? 1 : 0;
-    prof.setAttribute("aria-pressed", String(character.saves[a.id]));
   }
-  for (const s of SKILLS) {
-    setOut(`skill-${s.id}`, formatModifier(skillBonus(character, s)));
-    const prof = $(`[data-skill-prof="${s.id}"]`);
-    const level = character.skills[s.id];
-    prof.dataset.level = level;
-    prof.title = ["Нет владения", "Владение", "Компетентность"][level];
-  }
+  for (const s of SKILLS) setOut(`skill-${s.id}`, formatModifier(skillBonus(character, s)));
   setOut("initiative", formatModifier(initiativeBonus(character)));
-  setOut("passive", String(passivePerception(character)));
 
-  const { current, max, temp } = character.hp;
-  const fill = Math.min(100, (current / max) * 100);
-  const fillEl = $('[data-out="hpFill"]');
-  fillEl.style.width = `${fill}%`;
-  fillEl.style.background = fill > 50 ? "var(--success)" : fill > 25 ? "var(--gold)" : "var(--danger)";
-  const tempEl = $('[data-out="hpTemp"]');
-  tempEl.style.left = `${fill}%`;
-  tempEl.style.width = `${Math.min(100 - fill, (temp / max) * 100)}%`;
+  fillBar($('[data-out="hpFill"]'), character.hp, true);
+  for (const res of character.resources) {
+    const el = $(`[data-resource-fill="${res.id}"]`);
+    if (el) fillBar(el, res, false);
+  }
 
-  for (const el of $$("[data-toggle]")) el.setAttribute("aria-pressed", String(Boolean(getPath(character, el.dataset.toggle))));
+  const adv = settings.advantage;
+  $("#adv-label").textContent = advantageLabel(adv);
+  $(".stepper").dataset.state = adv > 0 ? "advantage" : adv < 0 ? "disadvantage" : "normal";
+  $("#adv-down").disabled = adv <= -MAX_ADVANTAGE;
+  $("#adv-up").disabled = adv >= MAX_ADVANTAGE;
+
   for (const el of $$("[data-setting]")) el.setAttribute("aria-pressed", String(Boolean(settings[el.dataset.setting])));
-  for (const el of $$("[data-mode]")) el.setAttribute("aria-checked", String(el.dataset.mode === settings.mode));
+  const toggle3d = $("#toggle-3d");
+  toggle3d.disabled = !dice3dAvailable;
+  toggle3d.title = dice3dAvailable
+    ? "3D-кубики через расширение Dice (dnd-sheet)"
+    : "3D-кубики: установите в комнату расширение Dice (dnd-sheet)";
+  if (!dice3dAvailable) toggle3d.setAttribute("aria-pressed", "false");
+  $("#dice-style-field").hidden = !dice3dAvailable;
+  $("#dice-style").value = settings.diceStyle;
+
   for (const el of $$("[data-tab]")) el.setAttribute("aria-selected", String(el.dataset.tab === settings.tab));
   for (const el of $$("[data-panel]")) el.hidden = el.dataset.panel !== settings.tab;
 }
@@ -230,6 +268,30 @@ function showLastRoll(roll) {
   el.style.animation = "";
 }
 
+function showRolling(label) {
+  const el = $("#last-roll");
+  el.hidden = false;
+  el.className = "last-roll";
+  el.replaceChildren(`🎲 ${label}: кубики катятся…`);
+}
+
+function use3d() {
+  return settings.use3d && dice3dAvailable;
+}
+
+/** Бросок 3D-кубиками; при любой ошибке возвращает null, и бросок делается встроенным генератором. */
+async function tryRoll3d(label, request) {
+  if (!use3d() || !request) return null;
+  showRolling(label);
+  try {
+    return await roll3d(request, { hidden: settings.hidden, style: settings.diceStyle });
+  } catch (e) {
+    console.warn("[dnd-sheet] 3D-бросок не удался", e);
+    setStatus(`3D-кубики: ${e.message}. Бросок сделан без них`, true);
+    return null;
+  }
+}
+
 async function doRoll(payload) {
   const roll = { ...payload, hidden: settings.hidden, characterName: character.name.trim() };
   showLastRoll(roll);
@@ -241,31 +303,42 @@ async function doRoll(payload) {
   }
 }
 
-function rollCheck(label, modifier) {
-  const r = rollD20(modifier, settings.mode);
-  doRoll({ kind: "d20", label, modifier, mode: settings.mode, rolls: r.rolls, total: r.total, crit: r.crit, fumble: r.fumble });
+async function rollCheck(label, modifier) {
+  const advantage = settings.advantage;
+  const result3d = await tryRoll3d(label, d20Request(modifier, advantage));
+  const r = result3d ? d20FromRolls(result3d.values, modifier, advantage) : rollD20(modifier, advantage);
+  doRoll({
+    kind: "d20", label, modifier, advantage, rolls: r.rolls, total: r.total, crit: r.crit, fumble: r.fumble,
+    dice3d: Boolean(result3d),
+  });
   return r;
 }
 
-function rollDamage(label, formula) {
+async function rollDamage(label, formula) {
+  let terms;
   try {
-    const r = rollFormula(formula);
-    doRoll({ kind: "formula", label, total: r.total, detail: `${formula}: ${r.text}`, crit: false, fumble: false });
-    return true;
+    terms = parseFormula(formula);
   } catch (e) {
     setStatus(e.message, true);
     return false;
   }
+  const result3d = await tryRoll3d(label, formulaRequest(terms));
+  const r = result3d ? formulaFromValues(terms, result3d.values) : rollFormula(formula);
+  doRoll({
+    kind: "formula", label, total: r.total, detail: `${formula}: ${r.text}`, crit: false, fumble: false,
+    dice3d: Boolean(result3d),
+  });
+  return true;
 }
 
 function attackName(atk) {
   return atk.name.trim() || "Атака";
 }
 
-function rollAttack(id) {
+async function rollAttack(id) {
   const atk = character.attacks.find((a) => a.id === id);
   if (!atk) return;
-  const r = rollCheck(attackName(atk), atk.bonus);
+  const r = await rollCheck(attackName(atk), atk.bonus);
   if (r.crit) lastCritAt.set(id, Date.now());
   else lastCritAt.delete(id);
 }
@@ -286,6 +359,20 @@ function rollAttackDamage(id) {
 function removeAttack(id) {
   character.attacks = character.attacks.filter((a) => a.id !== id);
   renderAttacks();
+  changed();
+}
+
+function removeResource(id) {
+  character.resources = character.resources.filter((r) => r.id !== id);
+  renderResources();
+  changed();
+}
+
+function changeResource(id, fn) {
+  const index = character.resources.findIndex((r) => r.id === id);
+  if (index < 0) return;
+  character.resources[index] = fn(character.resources[index], 1);
+  syncInputs();
   changed();
 }
 
@@ -359,6 +446,7 @@ function replaceCharacter(next) {
   character = next;
   lastCritAt.clear();
   renderAttacks();
+  renderResources();
   syncInputs();
   changed();
 }
@@ -377,24 +465,30 @@ function bindEvents() {
         setPath(character, el.dataset.path, el.value);
       }
       changed();
-    } else if (el.dataset.attackField) {
-      const atk = character.attacks.find((a) => a.id === el.closest("[data-attack-id]").dataset.attackId);
-      if (!atk) return;
-      const field = el.dataset.attackField;
-      if (field === "bonus") {
-        const n = toInt(el.value, NaN);
-        if (Number.isNaN(n)) return;
-        atk.bonus = n;
-      } else {
-        atk[field] = el.value;
-      }
-      changed();
+      return;
     }
+    const field = el.dataset.attackField ?? el.dataset.resourceField;
+    if (!field) return;
+    const [items, rowAttr] = el.dataset.attackField
+      ? [character.attacks, "attackId"]
+      : [character.resources, "resourceId"];
+    const row = el.closest(el.dataset.attackField ? "[data-attack-id]" : "[data-resource-id]");
+    const item = items.find((i) => i.id === row?.dataset[rowAttr]);
+    if (!item) return;
+    if (el.type === "number") {
+      const n = toInt(el.value, NaN);
+      if (Number.isNaN(n)) return;
+      item[field] = n;
+    } else {
+      item[field] = el.value;
+    }
+    changed();
   });
 
   // По окончании ввода приводим значения к допустимым и показываем исправленные.
   document.addEventListener("change", (e) => {
-    if (!e.target.dataset.path && !e.target.dataset.attackField) return;
+    const d = e.target.dataset;
+    if (!d.path && !d.attackField && !d.resourceField) return;
     character = normalizeCharacter(character);
     syncInputs();
     changed();
@@ -403,26 +497,19 @@ function bindEvents() {
   document.addEventListener("click", (e) => {
     const el = e.target.closest("button");
     if (!el) return;
-    const { saveProf, skillProf, toggle, setting, mode, tab } = el.dataset;
-    if (saveProf) {
-      character.saves[saveProf] = !character.saves[saveProf];
-      changed();
-    } else if (skillProf) {
-      character.skills[skillProf] = (character.skills[skillProf] + 1) % 3;
-      changed();
-    } else if (toggle) {
-      setPath(character, toggle, !getPath(character, toggle));
-      changed();
-    } else if (setting) {
+    const { setting, tab } = el.dataset;
+    if (setting) {
       setSettings({ [setting]: !settings[setting] });
-    } else if (mode) {
-      setSettings({ mode });
     } else if (tab) {
       if (tab === "log") unreadLog = 0;
       setSettings({ tab });
       renderLog();
     }
   });
+
+  $("#adv-down").addEventListener("click", () => setSettings({ advantage: Math.max(-MAX_ADVANTAGE, settings.advantage - 1) }));
+  $("#adv-up").addEventListener("click", () => setSettings({ advantage: Math.min(MAX_ADVANTAGE, settings.advantage + 1) }));
+  $("#dice-style").addEventListener("change", (e) => setSettings({ diceStyle: e.target.value }));
 
   $("#roll-initiative").addEventListener("click", () => rollCheck("Инициатива", initiativeBonus(character)));
 
@@ -435,8 +522,8 @@ function bindEvents() {
     syncInputs();
     changed();
   };
-  $("#hp-damage").addEventListener("click", () => changeHp(applyDamage));
-  $("#hp-heal").addEventListener("click", () => changeHp(applyHealing));
+  $("#hp-damage").addEventListener("click", () => changeHp(spendPool));
+  $("#hp-heal").addEventListener("click", () => changeHp(restorePool));
 
   $("#add-attack").addEventListener("click", () => {
     if (character.attacks.length >= MAX_ATTACKS) return;
@@ -446,10 +533,18 @@ function bindEvents() {
     changed();
   });
 
-  $("#free-roll").addEventListener("submit", (e) => {
+  $("#add-resource").addEventListener("click", () => {
+    if (character.resources.length >= MAX_RESOURCES) return;
+    character.resources.push(createResource());
+    renderResources();
+    $("#resources .resource:last-child input")?.focus();
+    changed();
+  });
+
+  $("#free-roll").addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = $("#free-formula");
-    if (rollDamage("Бросок", input.value.trim())) input.select();
+    if (await rollDamage("Бросок", input.value.trim())) input.select();
   });
 
   $("#clear-log").addEventListener("click", () => {
@@ -473,6 +568,13 @@ function bindEvents() {
   window.addEventListener("dnd-sheet:log", renderLog);
 }
 
+/** Ищет расширение с 3D-кубиками; пока не найдено — повторяет время от времени. */
+async function watchDice3d() {
+  dice3dAvailable = await detectDice3d();
+  refresh();
+  if (!dice3dAvailable) setTimeout(watchDice3d, DICE_3D_RETRY_MS);
+}
+
 // ---------- Запуск ----------
 
 async function start() {
@@ -491,10 +593,12 @@ async function start() {
   character = await loadCharacter();
   loaded = true;
   renderAttacks();
+  renderResources();
   syncInputs();
   refresh();
   loadLog().forEach((r) => seenLogIds.add(r.id));
   renderLog();
+  watchDice3d();
 
   try {
     version = (await (await fetch("manifest.json", { cache: "no-cache" })).json()).version;

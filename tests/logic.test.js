@@ -2,10 +2,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  abilityModifier, proficiencyBonus, formatModifier, skillBonus, savingThrowBonus,
-  passivePerception, applyDamage, applyHealing, SKILLS,
+  abilityModifier, formatModifier, skillBonus, savingThrowBonus, initiativeBonus,
+  advantageLabel, spendPool, restorePool, SKILLS,
 } from "../js/rules.js";
-import { parseFormula, rollFormula, rollD20, critFormula } from "../js/dice.js";
+import {
+  parseFormula, rollFormula, rollD20, d20FromRolls, d20Request, formulaRequest, formulaFromValues, critFormula,
+} from "../js/dice.js";
 import { createCharacter, normalizeCharacter } from "../js/character.js";
 
 // Предсказуемый «генератор»: выдаёт заданные значения по кругу (0..1).
@@ -27,31 +29,28 @@ test("модификатор характеристики", () => {
   assert.equal(abilityModifier(99), 10, "значение ограничено 30");
 });
 
-test("бонус мастерства по уровню", () => {
-  assert.deepEqual([1, 4, 5, 8, 9, 12, 13, 16, 17, 20].map(proficiencyBonus), [2, 2, 3, 3, 4, 4, 5, 5, 6, 6]);
-});
-
 test("формат модификатора", () => {
   assert.equal(formatModifier(3), "+3");
   assert.equal(formatModifier(0), "+0");
   assert.equal(formatModifier(-2), "−2");
 });
 
-test("навыки, спасброски и пассивная внимательность учитывают владение", () => {
+test("спасброски и навыки равны модификатору характеристики, без бонусов", () => {
   const c = createCharacter();
-  c.level = 5; // БМ +3
-  c.abilities.wis = 14; // +2
-  c.abilities.str = 16; // +3
-  const perception = SKILLS.find((s) => s.id === "perception");
-  assert.equal(skillBonus(c, perception), 2);
-  c.skills.perception = 1;
-  assert.equal(skillBonus(c, perception), 5);
-  c.skills.perception = 2;
-  assert.equal(skillBonus(c, perception), 8);
-  assert.equal(passivePerception(c), 18);
+  c.abilities.str = 16;
+  c.abilities.wis = 7;
   assert.equal(savingThrowBonus(c, "str"), 3);
-  c.saves.str = true;
-  assert.equal(savingThrowBonus(c, "str"), 6);
+  assert.equal(savingThrowBonus(c, "wis"), -2);
+  for (const s of SKILLS) {
+    assert.equal(skillBonus(c, s), abilityModifier(c.abilities[s.ability]), s.name);
+  }
+});
+
+test("инициатива — ловкость плюс прочий бонус", () => {
+  const c = createCharacter();
+  c.abilities.dex = 14;
+  c.combat.initiativeMisc = 1;
+  assert.equal(initiativeBonus(c), 3);
 });
 
 test("18 навыков, у всех уникальные id", () => {
@@ -59,10 +58,17 @@ test("18 навыков, у всех уникальные id", () => {
   assert.equal(new Set(SKILLS.map((s) => s.id)).size, 18);
 });
 
-test("урон сначала снимает временные хиты, лечение не выше максимума", () => {
-  assert.deepEqual(applyDamage({ current: 10, max: 20, temp: 5 }, 8), { current: 7, max: 20, temp: 0 });
-  assert.deepEqual(applyDamage({ current: 3, max: 20, temp: 0 }, 10), { current: 0, max: 20, temp: 0 });
-  assert.deepEqual(applyHealing({ current: 15, max: 20, temp: 0 }, 10), { current: 20, max: 20, temp: 0 });
+test("пулы (хиты, мана) не уходят ниже нуля и выше максимума", () => {
+  assert.deepEqual(spendPool({ current: 3, max: 20 }, 10), { current: 0, max: 20 });
+  assert.deepEqual(spendPool({ current: 10, max: 20 }, 4), { current: 6, max: 20 });
+  assert.deepEqual(restorePool({ current: 15, max: 20 }, 10), { current: 20, max: 20 });
+});
+
+test("подпись преимущества и помехи", () => {
+  assert.equal(advantageLabel(0), "Обычный бросок");
+  assert.equal(advantageLabel(1), "Преимущество");
+  assert.equal(advantageLabel(3), "Преимущество ×3");
+  assert.equal(advantageLabel(-2), "Помеха ×2");
 });
 
 test("разбор формул", () => {
@@ -88,14 +94,40 @@ test("бросок формулы", () => {
   assert.equal(r.text, "[1, 6] + 3");
 });
 
-test("d20: преимущество, помеха, крит и провал", () => {
-  assert.equal(rollD20(5, "normal", fixed(0.99)).total, 25);
-  assert.equal(rollD20(5, "normal", fixed(0.99)).crit, true);
-  const adv = rollD20(0, "advantage", fixed(0.2, 0.7));
-  assert.deepEqual(adv.rolls, [5, 15]);
-  assert.equal(adv.d20, 15);
-  assert.equal(rollD20(0, "disadvantage", fixed(0.2, 0.7)).d20, 5);
-  assert.equal(rollD20(0, "normal", fixed(0)).fumble, true);
+test("d20: многократные преимущество и помеха", () => {
+  assert.equal(rollD20(5, 0, fixed(0.99)).total, 25);
+  assert.equal(rollD20(5, 0, fixed(0.99)).crit, true);
+  assert.equal(rollD20(0, 0, fixed(0)).fumble, true);
+  const adv2 = rollD20(1, 2, fixed(0.2, 0.7, 0.45));
+  assert.deepEqual(adv2.rolls, [5, 15, 10], "преимущество ×2 — три d20");
+  assert.equal(adv2.d20, 15);
+  assert.equal(adv2.total, 16);
+  const dis3 = rollD20(0, -3, fixed(0.2, 0.7, 0.45, 0.9));
+  assert.equal(dis3.rolls.length, 4, "помеха ×3 — четыре d20");
+  assert.equal(dis3.d20, 5);
+});
+
+test("d20 по значениям 3D-кубиков", () => {
+  assert.deepEqual(d20FromRolls([19, 5], 3, 1), { d20: 19, rolls: [19, 5], total: 22, crit: false, fumble: false });
+  assert.equal(d20FromRolls([19, 5, 1], 0, -2).fumble, true);
+});
+
+test("запросы к 3D-кубикам", () => {
+  assert.deepEqual(d20Request(4, 0), { dice: ["D20"], bonus: 4 });
+  assert.deepEqual(d20Request(-1, 2), { dice: ["D20", "D20", "D20"], bonus: -1, combination: "HIGHEST" });
+  assert.deepEqual(d20Request(0, -1), { dice: ["D20", "D20"], bonus: 0, combination: "LOWEST" });
+  assert.deepEqual(formulaRequest(parseFormula("2d6+1d4-1")), { dice: ["D6", "D6", "D4"], bonus: -1 });
+  assert.deepEqual(formulaRequest(parseFormula("d100")), { dice: [{ dice: ["D100", "D10"] }], bonus: 0 });
+  assert.equal(formulaRequest(parseFormula("1d20-1d4")), null, "вычитание кубиков — встроенный генератор");
+  assert.equal(formulaRequest(parseFormula("3d7")), null, "нестандартные грани — встроенный генератор");
+  assert.equal(formulaRequest(parseFormula("21d6")), null, "больше 20 кубиков — встроенный генератор");
+  assert.equal(formulaRequest(parseFormula("5")), null);
+});
+
+test("результат формулы по значениям 3D-кубиков", () => {
+  const r = formulaFromValues(parseFormula("2d6+1d4+2"), [3, 5, 2]);
+  assert.equal(r.total, 12);
+  assert.equal(r.text, "[3, 5] + [2] + 2");
 });
 
 test("критический урон удваивает кубики, но не модификатор", () => {
@@ -105,26 +137,37 @@ test("критический урон удваивает кубики, но не
 
 test("нормализация отбрасывает мусор и ограничивает значения", () => {
   const c = normalizeCharacter({
-    version: 3, name: 42, level: 99, abilities: { str: 50, dex: "abc" },
-    skills: { stealth: 7, athletics: 2 }, hp: { current: 500, max: 20, temp: -3 },
+    name: 42, abilities: { str: 50, dex: "abc" }, hp: { current: 500, max: 20 },
+    resources: [{ name: "Мана", current: 9, max: 4 }, { name: "Дзен" }],
     attacks: [{ name: "Меч", bonus: "5", damage: "1d8+3" }, null], evil: "<script>",
   });
   assert.equal(c.name, "");
-  assert.equal(c.level, 20);
   assert.equal(c.abilities.str, 30);
   assert.equal(c.abilities.dex, 10);
-  assert.equal(c.skills.stealth, 0);
-  assert.equal(c.skills.athletics, 2);
-  assert.deepEqual(c.hp, { current: 20, max: 20, temp: 0 });
+  assert.deepEqual(c.hp, { max: 20, current: 20 });
+  assert.equal(c.resources.length, 2);
+  assert.equal(c.resources[0].current, 4, "текущее не больше максимума");
+  assert.equal(c.resources[1].max, 5);
   assert.equal(c.attacks.length, 2);
   assert.equal(c.attacks[0].bonus, 5);
   assert.equal("evil" in c, false);
 });
 
-test("миграция листа из версии 1.x", () => {
-  const c = normalizeCharacter({ name: "Арагорн", str: "16", dex: "14", con: "12", int: "10", wis: "13", cha: "8" });
-  assert.equal(c.name, "Арагорн");
-  assert.equal(c.abilities.str, 16);
-  assert.equal(c.abilities.cha, 8);
-  assert.equal(c.level, 1);
+test("миграция: лишние поля прошлых версий отбрасываются", () => {
+  const v3 = normalizeCharacter({
+    version: 3, name: "Гимли", className: "Воин", level: 7, abilities: { str: 18 },
+    saves: { str: true }, skills: { athletics: 2 }, combat: { ac: 16, inspiration: true },
+    hp: { current: 30, max: 40, temp: 5 },
+  });
+  assert.equal(v3.name, "Гимли");
+  assert.equal(v3.abilities.str, 18);
+  assert.equal(v3.combat.ac, 16);
+  assert.deepEqual(v3.hp, { max: 40, current: 30 });
+  for (const field of ["className", "level", "saves", "skills"]) assert.equal(field in v3, false, field);
+  assert.equal("inspiration" in v3.combat, false);
+
+  const v1 = normalizeCharacter({ name: "Арагорн", str: "16", dex: "14", con: "12", int: "10", wis: "13", cha: "8" });
+  assert.equal(v1.name, "Арагорн");
+  assert.equal(v1.abilities.str, 16);
+  assert.equal(v1.abilities.cha, 8);
 });

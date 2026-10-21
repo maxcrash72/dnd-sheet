@@ -3,31 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Лист персонажа D&amp;D</title>
+  <title>Лист персонажа</title>
   <link rel="stylesheet" href="css/style.css">
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
   <header class="hero">
     <input id="name" class="hero-name" data-path="name" type="text" maxlength="80" placeholder="Имя персонажа" autocomplete="off" aria-label="Имя персонажа">
-    <div class="hero-row">
-      <input data-path="className" type="text" maxlength="80" placeholder="Класс, раса" autocomplete="off" aria-label="Класс и раса">
-      <label class="chip">Ур.
-        <input data-path="level" data-kind="int" type="number" min="1" max="20" inputmode="numeric" aria-label="Уровень">
-      </label>
-      <span class="chip" title="Бонус мастерства">БМ <b data-out="pb"></b></span>
-      <button type="button" class="chip toggle" data-toggle="combat.inspiration" title="Вдохновение" aria-label="Вдохновение">★</button>
-    </div>
   </header>
 
   <section class="rollbar" aria-label="Настройки броска">
-    <div class="segmented" role="radiogroup" aria-label="Режим броска">
-      <button type="button" role="radio" data-mode="disadvantage">Помеха</button>
-      <button type="button" role="radio" data-mode="normal">Обычный</button>
-      <button type="button" role="radio" data-mode="advantage">Преимущество</button>
+    <div class="stepper" role="group" aria-label="Преимущество и помеха">
+      <button type="button" id="adv-down" title="Больше помехи" aria-label="Больше помехи">−</button>
+      <span id="adv-label" class="stepper-label" aria-live="polite"></span>
+      <button type="button" id="adv-up" title="Больше преимущества" aria-label="Больше преимущества">+</button>
     </div>
     <button type="button" class="chip toggle" data-setting="hidden" title="Скрытый бросок: видите только вы и мастер">🔒</button>
     <button type="button" class="chip toggle" data-setting="showOnMap" title="Показывать результат на карте">🗺</button>
+    <button type="button" class="chip toggle" id="toggle-3d" data-setting="use3d" title="3D-кубики">🎲</button>
   </section>
 
   <output id="last-roll" class="last-roll" aria-live="polite" hidden></output>
@@ -41,7 +34,7 @@
   <main>
     <section class="panel" data-panel="sheet" role="tabpanel">
       <div id="abilities" class="abilities"></div>
-      <h2 class="section-title">Навыки <small>клик по кружку — владение, ещё раз — компетентность</small></h2>
+      <h2 class="section-title">Навыки</h2>
       <div id="skills" class="skills"></div>
     </section>
 
@@ -59,29 +52,27 @@
           <span>Скорость</span>
           <input data-path="combat.speed" data-kind="int" type="number" min="0" max="999" step="5" inputmode="numeric">
         </label>
-        <div class="stat">
-          <span>Пасс. вним.</span>
-          <b class="stat-value" data-out="passive"></b>
-        </div>
       </div>
       <label class="inline-field">Прочий бонус инициативы
         <input data-path="combat.initiativeMisc" data-kind="int" type="number" min="-20" max="20" inputmode="numeric">
       </label>
 
       <h2 class="section-title">Хиты</h2>
-      <div class="hp">
-        <div class="hp-bar"><div class="hp-fill" data-out="hpFill"></div><div class="hp-temp" data-out="hpTemp"></div></div>
-        <div class="hp-fields">
+      <div class="pool">
+        <div class="bar"><div class="bar-fill" data-out="hpFill"></div></div>
+        <div class="pool-fields">
           <label>Текущие<input data-path="hp.current" data-kind="int" type="number" min="0" inputmode="numeric"></label>
           <label>Максимум<input data-path="hp.max" data-kind="int" type="number" min="1" inputmode="numeric"></label>
-          <label>Временные<input data-path="hp.temp" data-kind="int" type="number" min="0" inputmode="numeric"></label>
         </div>
-        <div class="hp-actions">
+        <div class="pool-actions">
           <input id="hp-amount" type="number" min="0" inputmode="numeric" placeholder="0" aria-label="Количество хитов">
           <button type="button" class="btn danger" id="hp-damage">Урон</button>
           <button type="button" class="btn success" id="hp-heal">Лечение</button>
         </div>
       </div>
+
+      <div id="resources" class="resources"></div>
+      <button type="button" class="btn ghost wide" id="add-resource">+ Добавить ресурс (мана, дзен…)</button>
 
       <h2 class="section-title">Атаки и заклинания</h2>
       <div id="attacks" class="attacks"></div>
@@ -93,6 +84,9 @@
         <button type="submit" class="btn primary">Бросить</button>
       </form>
       <div class="quick-dice" id="quick-dice"></div>
+      <label class="inline-field" id="dice-style-field" hidden>Стиль 3D-кубиков
+        <select id="dice-style" aria-label="Стиль 3D-кубиков"></select>
+      </label>
 
       <h2 class="section-title">Заметки</h2>
       <textarea data-path="notes" maxlength="4000" rows="5" placeholder="Снаряжение, особенности, всё что угодно…"></textarea>

@@ -1,7 +1,10 @@
-// Кубики: честный генератор и разбор формул вида «2d6+1d4+3». Без DOM и SDK.
+// Кубики: генератор, разбор формул вида «2d6+1d4+3», подготовка запросов к 3D-кубикам. Без DOM и SDK.
 
 export const MAX_DICE = 100;
 export const MAX_SIDES = 1000;
+/** Кубики, которые умеет бросать расширение Dice */
+export const DICE_3D_SIDES = [4, 6, 8, 10, 12, 20, 100];
+export const MAX_DICE_3D = 20;
 
 /** Случайное целое 1..sides (источник — crypto, если доступно). */
 export function rollDie(sides, random = defaultRandom) {
@@ -50,21 +53,36 @@ export function parseFormula(formula) {
   return terms;
 }
 
-/** Бросает формулу. Результат: { total, parts: [{ sign, sides?, rolls?, value }], text } */
-export function rollFormula(formula, random) {
-  const terms = parseFormula(formula);
+/** Сколько кубиков в формуле, по порядку: [6, 6, 4] для «2d6+1d4». */
+function diceSides(terms) {
+  return terms.filter((t) => t.kind === "dice").flatMap((t) => Array(t.count).fill(t.sides));
+}
+
+/**
+ * Считает результат формулы по уже выпавшим значениям (по одному на кубик, в порядке формулы).
+ * Результат: { total, parts: [{ sign, sides?, rolls?, value }], text }
+ */
+export function formulaFromValues(terms, values) {
+  let i = 0;
   let total = 0;
   const parts = terms.map((t) => {
     if (t.kind === "flat") {
       total += t.sign * t.value;
       return { sign: t.sign, value: t.value };
     }
-    const rolls = Array.from({ length: t.count }, () => rollDie(t.sides, random));
+    const rolls = values.slice(i, i + t.count);
+    i += t.count;
     const sum = rolls.reduce((a, b) => a + b, 0);
     total += t.sign * sum;
     return { sign: t.sign, sides: t.sides, rolls, value: sum };
   });
   return { total, parts, text: describeParts(parts) };
+}
+
+/** Бросает формулу встроенным генератором. */
+export function rollFormula(formula, random) {
+  const terms = parseFormula(formula);
+  return formulaFromValues(terms, diceSides(terms).map((sides) => rollDie(sides, random)));
 }
 
 function describeParts(parts) {
@@ -77,22 +95,47 @@ function describeParts(parts) {
     .join("");
 }
 
-export const ROLL_MODES = ["normal", "advantage", "disadvantage"];
+/** Сколько d20 бросается: один основной + по одному за каждый уровень преимущества/помехи. */
+export function d20Count(advantage) {
+  return 1 + Math.abs(advantage || 0);
+}
 
 /**
- * Бросок d20 с модификатором и режимом (преимущество/помеха).
+ * Итог броска d20 по выпавшим кубикам: при преимуществе берётся лучший, при помехе — худший.
  * Возвращает { d20, rolls, total, crit, fumble }.
  */
-export function rollD20(modifier, mode = "normal", random) {
-  const first = rollDie(20, random);
-  const rolls = [first];
-  let d20 = first;
-  if (mode === "advantage" || mode === "disadvantage") {
-    const second = rollDie(20, random);
-    rolls.push(second);
-    d20 = mode === "advantage" ? Math.max(first, second) : Math.min(first, second);
-  }
+export function d20FromRolls(rolls, modifier, advantage = 0) {
+  const d20 = advantage > 0 ? Math.max(...rolls) : advantage < 0 ? Math.min(...rolls) : rolls[0];
   return { d20, rolls, total: d20 + modifier, crit: d20 === 20, fumble: d20 === 1 };
+}
+
+/** Бросок d20 встроенным генератором. advantage: 0 — обычный, +N — преимущество, −N — помеха. */
+export function rollD20(modifier, advantage = 0, random) {
+  const rolls = Array.from({ length: d20Count(advantage) }, () => rollDie(20, random));
+  return d20FromRolls(rolls, modifier, advantage);
+}
+
+/** Запрос к 3D-кубикам для броска d20 (формат API расширения Dice). */
+export function d20Request(modifier, advantage = 0) {
+  const roll = { dice: Array(d20Count(advantage)).fill("D20"), bonus: modifier };
+  if (advantage) roll.combination = advantage > 0 ? "HIGHEST" : "LOWEST";
+  return roll;
+}
+
+/**
+ * Запрос к 3D-кубикам для формулы или null, если её нельзя бросить настоящими кубиками
+ * (вычитание кубиков, нестандартные грани, слишком много кубиков). d100 — пара D100 + D10.
+ */
+export function formulaRequest(terms) {
+  const dice = terms.filter((t) => t.kind === "dice");
+  const count = dice.reduce((n, t) => n + t.count * (t.sides === 100 ? 2 : 1), 0);
+  if (!dice.length || count > MAX_DICE_3D) return null;
+  if (dice.some((t) => t.sign < 0 || !DICE_3D_SIDES.includes(t.sides))) return null;
+  const bonus = terms.filter((t) => t.kind === "flat").reduce((sum, t) => sum + t.sign * t.value, 0);
+  return {
+    dice: diceSides(terms).map((sides) => (sides === 100 ? { dice: ["D100", "D10"] } : `D${sides}`)),
+    bonus,
+  };
 }
 
 /** Удваивает количество кубиков в формуле (критическое попадание). */
