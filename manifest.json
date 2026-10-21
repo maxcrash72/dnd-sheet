@@ -1,12 +1,17 @@
 {
   "name": "D&D Character Sheet",
-  "version": "1.33.0",
+  "version": "2.0.0",
   "manifest_version": 1,
+  "author": "maxcrash72",
+  "description": "Лист персонажа D&D 5e на русском: характеристики, навыки, хиты, атаки и броски, которые видят все игроки комнаты",
+  "homepage_url": "https://github.com/maxcrash72/dnd-sheet",
+  "icon": "https://maxcrash72.github.io/dnd-sheet/icon.svg",
   "action": {
     "title": "Лист персонажа",
-    "icon": "https://img.icons8.com/color/48/dungeons-and-dragons.png",
-    "popover": "https://crashmax881-sys.github.io/dnd-sheet/index.html",
+    "icon": "https://maxcrash72.github.io/dnd-sheet/icon.svg",
+    "popover": "https://maxcrash72.github.io/dnd-sheet/index.html",
     "width": 450,
     "height": 700
-  }
+  },
+  "background_url": "https://maxcrash72.github.io/dnd-sheet/background.html"
 }

@@ -1,0 +1,10 @@
+{
+  "name": "dnd-sheet",
+  "private": true,
+  "type": "module",
+  "description": "Лист персонажа D&D 5e — расширение для Owlbear Rodeo",
+  "scripts": {
+    "test": "node --test tests/",
+    "start": "npx --yes serve@14.2.4 -l 5173 ."
+  }
+}

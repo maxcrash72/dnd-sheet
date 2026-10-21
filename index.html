@@ -1,180 +1,133 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <link rel="stylesheet" href="style.css">
-    <style>
-        #debug-log {
-            background: #000;
-            color: #0f0;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            padding: 8px;
-            max-height: 120px;
-            overflow-y: auto;
-            border-top: 2px solid #444;
-            white-space: pre-wrap;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Лист персонажа D&amp;D</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
 </head>
 <body>
-    <div id="app">
-        <div class="header">
-            <input type="text" id="charName" placeholder="Имя персонажа...">
-        </div>
-        <div id="stats-list"></div>
-        <div class="footer">
-            <p id="status">v1.33.0 - Ready</p>
-            <div id="debug-log"></div>
-        </div>
+  <header class="hero">
+    <input id="name" class="hero-name" data-path="name" type="text" maxlength="80" placeholder="Имя персонажа" autocomplete="off" aria-label="Имя персонажа">
+    <div class="hero-row">
+      <input data-path="className" type="text" maxlength="80" placeholder="Класс, раса" autocomplete="off" aria-label="Класс и раса">
+      <label class="chip">Ур.
+        <input data-path="level" data-kind="int" type="number" min="1" max="20" inputmode="numeric" aria-label="Уровень">
+      </label>
+      <span class="chip" title="Бонус мастерства">БМ <b data-out="pb"></b></span>
+      <button type="button" class="chip toggle" data-toggle="combat.inspiration" title="Вдохновение" aria-label="Вдохновение">★</button>
     </div>
+  </header>
 
-    <script type="module">
-        import OBR from "https://cdn.skypack.dev/@owlbear-rodeo/sdk";
+  <section class="rollbar" aria-label="Настройки броска">
+    <div class="segmented" role="radiogroup" aria-label="Режим броска">
+      <button type="button" role="radio" data-mode="disadvantage">Помеха</button>
+      <button type="button" role="radio" data-mode="normal">Обычный</button>
+      <button type="button" role="radio" data-mode="advantage">Преимущество</button>
+    </div>
+    <button type="button" class="chip toggle" data-setting="hidden" title="Скрытый бросок: видите только вы и мастер">🔒</button>
+    <button type="button" class="chip toggle" data-setting="showOnMap" title="Показывать результат на карте">🗺</button>
+  </section>
 
-        const SCHEMA = [
-            { id: 'str', name: 'СИЛА', skills: ['Атлетика'] },
-            { id: 'dex', name: 'ЛОВКОСТЬ', skills: ['Акробатика', 'Ловкость рук', 'Скрытность'] },
-            { id: 'con', name: 'ТЕЛОСЛОЖЕНИЕ', skills: [] },
-            { id: 'int', name: 'ИНТЕЛЛЕКТ', skills: ['Анализ', 'История', 'Магия', 'Природа', 'Религия'] },
-            { id: 'wis', name: 'МУДРОСТЬ', skills: ['Внимательность', 'Выживание', 'Медицина', 'Проницательность', 'Уход за животными'] },
-            { id: 'cha', name: 'ХАРИЗМА', skills: ['Выступление', 'Запугивание', 'Обман', 'Убеждение'] }
-        ];
+  <output id="last-roll" class="last-roll" aria-live="polite" hidden></output>
 
-        function log(msg) {
-            const el = document.getElementById('debug-log');
-            if (el) {
-                el.innerText += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
-                el.scrollTop = el.scrollHeight;
-            }
-        }
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="sheet">Персонаж</button>
+    <button type="button" role="tab" data-tab="combat">Бой</button>
+    <button type="button" role="tab" data-tab="log">Журнал <span id="log-badge" class="badge" hidden></span></button>
+  </nav>
 
-        async function rollOnMap(label, statId) {
-            log(`Starting roll for ${label}...`);
-            const input = document.getElementById(statId);
-            const mod = Math.floor(((input ? input.value : 10) - 10) / 2);
-            const charName = document.getElementById('charName').value || "Герой";
-            
-            const d20 = Math.floor(Math.random() * 20) + 1;
-            const total = d20 + mod;
+  <main>
+    <section class="panel" data-panel="sheet" role="tabpanel">
+      <div id="abilities" class="abilities"></div>
+      <h2 class="section-title">Навыки <small>клик по кружку — владение, ещё раз — компетентность</small></h2>
+      <div id="skills" class="skills"></div>
+    </section>
 
-            try {
-                // 1. Проверка метода
-                if (!OBR.scene.items || !OBR.scene.items.addItems) {
-                    throw new Error("OBR.scene.items.addItems is not available");
-                }
+    <section class="panel" data-panel="combat" role="tabpanel" hidden>
+      <div class="stats">
+        <label class="stat">
+          <span>КД</span>
+          <input data-path="combat.ac" data-kind="int" type="number" min="0" max="99" inputmode="numeric">
+        </label>
+        <div class="stat">
+          <span>Инициатива</span>
+          <button type="button" class="roll-btn big" id="roll-initiative" data-out="initiative"></button>
+        </div>
+        <label class="stat">
+          <span>Скорость</span>
+          <input data-path="combat.speed" data-kind="int" type="number" min="0" max="999" step="5" inputmode="numeric">
+        </label>
+        <div class="stat">
+          <span>Пасс. вним.</span>
+          <b class="stat-value" data-out="passive"></b>
+        </div>
+      </div>
+      <label class="inline-field">Прочий бонус инициативы
+        <input data-path="combat.initiativeMisc" data-kind="int" type="number" min="-20" max="20" inputmode="numeric">
+      </label>
 
-                // 2. Создаем минимально возможный объект по документации
-                const diceItem = {
-                    id: `d_${Date.now()}`,
-                    type: "LABEL",
-                    name: "Dice",
-                    position: { x: 0, y: 0 },
-                    visible: true,
-                    layer: "CHARACTER",
-                    text: {
-                        plainText: `${charName}: ${total} (${label})`,
-                        style: {
-                            fillColor: "#ffffff",
-                            fontSize: 40,
-                            fontWeight: 700,
-                            textAlign: "CENTER",
-                            verticalAlign: "MIDDLE",
-                            backgroundColor: d20 === 20 ? "#ff0" : "#44f",
-                            backgroundOpacity: 1,
-                            padding: 10
-                        },
-                        width: 400,
-                        height: 100
-                    }
-                };
+      <h2 class="section-title">Хиты</h2>
+      <div class="hp">
+        <div class="hp-bar"><div class="hp-fill" data-out="hpFill"></div><div class="hp-temp" data-out="hpTemp"></div></div>
+        <div class="hp-fields">
+          <label>Текущие<input data-path="hp.current" data-kind="int" type="number" min="0" inputmode="numeric"></label>
+          <label>Максимум<input data-path="hp.max" data-kind="int" type="number" min="1" inputmode="numeric"></label>
+          <label>Временные<input data-path="hp.temp" data-kind="int" type="number" min="0" inputmode="numeric"></label>
+        </div>
+        <div class="hp-actions">
+          <input id="hp-amount" type="number" min="0" inputmode="numeric" placeholder="0" aria-label="Количество хитов">
+          <button type="button" class="btn danger" id="hp-damage">Урон</button>
+          <button type="button" class="btn success" id="hp-heal">Лечение</button>
+        </div>
+      </div>
 
-                log("Attempting to addItems...");
-                await OBR.scene.items.addItems([diceItem]);
-                log("SUCCESS: Item added to scene.");
+      <h2 class="section-title">Атаки и заклинания</h2>
+      <div id="attacks" class="attacks"></div>
+      <button type="button" class="btn ghost wide" id="add-attack">+ Добавить атаку</button>
 
-                // Удаление
-                setTimeout(() => {
-                    OBR.scene.items.deleteItems([diceItem.id]).catch(e => log("Delete fail: " + e.message));
-                }, 5000);
+      <h2 class="section-title">Свой бросок</h2>
+      <form id="free-roll" class="free-roll">
+        <input id="free-formula" type="text" placeholder="например, 2d6+3 или 4к6" autocomplete="off" aria-label="Формула броска">
+        <button type="submit" class="btn primary">Бросить</button>
+      </form>
+      <div class="quick-dice" id="quick-dice"></div>
 
-            } catch (e) {
-                log("ROLL ERROR: " + e.message);
-                console.error(e);
-            }
-        }
+      <h2 class="section-title">Заметки</h2>
+      <textarea data-path="notes" maxlength="4000" rows="5" placeholder="Снаряжение, особенности, всё что угодно…"></textarea>
+    </section>
 
-        function buildUI() {
-            const container = document.getElementById('stats-list');
-            if (!container) return;
-            container.innerHTML = ''; 
-            SCHEMA.forEach(stat => {
-                container.insertAdjacentHTML('beforeend', `
-                    <div class="stat-group">
-                        <div class="stat-header"><span>${stat.name}</span><input type="number" id="${stat.id}" value="10"></div>
-                        <div class="stat-actions">
-                            <div class="action-item roll-trigger" data-label="${stat.name}" data-stat="${stat.id}">
-                                <span>ПРОВЕРКА</span> <div class="mod-val" id="${stat.id}_mod">+0</div>
-                            </div>
-                            <div class="action-item roll-trigger" data-label="${stat.name} (Спас)" data-stat="${stat.id}">
-                                <span>СПАС</span> <div class="mod-val" id="${stat.id}_save">+0</div>
-                            </div>
-                        </div>
-                        <div class="skills-list">
-                            ${stat.skills.map(skill => `<div class="skill-item roll-trigger" data-label="${skill}" data-stat="${stat.id}"><span>${skill.toUpperCase()}</span><div class="mod-val" id="${stat.id}_${skill}">+0</div></div>`).join('')}
-                        </div>
-                    </div>
-                `);
-            });
-            document.querySelectorAll('.roll-trigger').forEach(el => {
-                el.onclick = () => rollOnMap(el.getAttribute('data-label'), el.getAttribute('data-stat'));
-            });
-            SCHEMA.forEach(stat => {
-                const el = document.getElementById(stat.id);
-                if (el) el.oninput = updateAll;
-            });
-        }
+    <section class="panel" data-panel="log" role="tabpanel" hidden>
+      <ol id="log" class="log"></ol>
+      <p id="log-empty" class="muted center">Здесь появятся броски всех игроков комнаты.</p>
+      <button type="button" class="btn ghost wide" id="clear-log">Очистить журнал</button>
+    </section>
+  </main>
 
-        function updateAll() {
-            SCHEMA.forEach(stat => {
-                const input = document.getElementById(stat.id);
-                if (!input) return;
-                const mod = Math.floor((input.value - 10) / 2);
-                const modStr = (mod >= 0 ? '+' : '') + mod;
-                document.getElementById(`${stat.id}_mod`).innerText = modStr;
-                document.getElementById(`${stat.id}_save`).innerText = modStr;
-                stat.skills.forEach(skill => {
-                    const el = document.getElementById(`${stat.id}_${skill}`);
-                    if (el) el.innerText = modStr;
-                });
-            });
-            autoSave();
-        }
+  <footer class="footer">
+    <span id="status" class="muted"></span>
+    <span class="footer-actions">
+      <button type="button" class="link" id="open-backup">Резервная копия</button>
+    </span>
+  </footer>
 
-        async function autoSave() {
-            const data = { name: document.getElementById('charName').value };
-            SCHEMA.forEach(s => data[s.id] = document.getElementById(s.id).value);
-            await OBR.player.setMetadata({ "ru_dnd_sheet/v2": data });
-        }
-
-        OBR.onReady(async () => {
-            buildUI();
-            log("SDK Ready. Checking Scene...");
-            const ready = await OBR.scene.isReady();
-            log("Scene Ready: " + ready);
-            
-            const metadata = await OBR.player.getMetadata();
-            const data = metadata["ru_dnd_sheet/v2"];
-            if (data) {
-                document.getElementById('charName').value = data.name || "";
-                SCHEMA.forEach(s => { 
-                    const input = document.getElementById(s.id);
-                    if (input && data[s.id]) input.value = data[s.id]; 
-                });
-            }
-            updateAll();
-            document.getElementById('charName').oninput = autoSave;
-        });
-    </script>
+  <dialog id="backup" class="dialog">
+    <form method="dialog">
+      <div class="dialog-head">
+        <h2>Резервная копия листа</h2>
+        <button class="close" value="close" aria-label="Закрыть">×</button>
+      </div>
+      <p class="muted">Скопируйте текст, чтобы сохранить персонажа, или вставьте сохранённый текст и нажмите «Загрузить».</p>
+      <textarea id="backup-text" rows="10" spellcheck="false"></textarea>
+      <p id="backup-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn danger" id="reset-sheet">Очистить лист</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="download-backup">Скачать</button>
+        <button type="button" class="btn primary" id="import-backup">Загрузить</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>
