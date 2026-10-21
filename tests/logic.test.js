@@ -167,3 +167,16 @@ test("миграция: лишние поля прошлых версий отб
   assert.equal(v1.abilities.str, 16);
   assert.equal(v1.abilities.cha, 8);
 });
+
+test("manifest.json проходит ограничения Owlbear", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const manifest = JSON.parse(await readFile(new URL("../manifest.json", import.meta.url), "utf8"));
+  assert.equal(manifest.manifest_version, 1);
+  for (const field of ["name", "version", "description", "author"]) {
+    assert.equal(typeof manifest[field], "string", field);
+  }
+  assert.ok(manifest.description.length <= 128, `description: ${manifest.description.length} > 128 символов`);
+  for (const url of [manifest.icon, manifest.action.icon, manifest.action.popover, manifest.background_url]) {
+    assert.match(url, /^https:\/\/maxcrash72\.github\.io\/dnd-sheet\//);
+  }
+});
